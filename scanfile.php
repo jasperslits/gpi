@@ -2,34 +2,57 @@
 
 class GPIfix {
 	private $skipbanks = true;
-	private $save = true;
-	
+	public $save = true;
+	private $destinationFolder = "splitted2";
+	private $today;
 
-/* Read start date */
-private function getGPIDate(DomDocument $xmlstruct): string
-{
-	$retDate = date("d/m/Y");
-	$nodes = ['AssignmentData','AddressDetails'];
-	foreach($nodes as $node) {
-		$r = $xmlstruct->getElementsByTagNameNS("*",$node);
-		printf("R %s = %d\n",$node,$r->length);
-		if ($r->length != 0) {
-			$date = $r[0]->getElementsByTagNameNS("*","StartDate")[0];
-			if (strpos($date->nodeValue,"/12/2018") > 0) { 
-				return $date->nodeValue;
-			} 
+	/* Read start date */
+	private function getGPIDate(DomDocument $xmlstruct): string
+	{
+		$retDate = $this->today;
+		$nodes = ['AssignmentData','AddressDetails','PaymentMethodData'];
+		foreach($nodes as $node) {
+			$r = $xmlstruct->getElementsByTagNameNS("*",$node);
+			
+			if ($r->length != 0) {
+				$startdate = ($node == 'PaymentMethodData') ? 'PayMethodStartDate' : 'StartDate';
+				$date = $r[0]->getElementsByTagNameNS("*",$startdate)[0];
+				if (! empty($date) && ( strpos($date->nodeValue,"/12/2018") > 0 || strpos($date->nodeValue,"/01/2019") > 0)) { 
+					return $date->nodeValue;
+				} 
+			}
 		}
+		
+		return $retDate;
 	}
-	
-	return $retDate;
-}
 
-private function splitfile(string $pernr,string $content): ?DomDocument
+	private function banks(string $pernr,Domnode $p) {
+		
+		// Sanity check for 1 person per file
+			$b = $p->getElementsByTagNameNS("*","PaymentMethodData");
+			if ($b->length != 0) {
+				printf("Removing banks for %s. Child nodes = %d\n",$pernr,$p->childNodes->length);
+				$p->removeChild($b[0]);
+				if ($p->childNodes->length == 3) {
+					printf("Skipping empty file for %s\n",$pernr);
+					return false;
+				} else {
+					return $p;
+					//return false;
+				}
+			} else {
+				return $p;
+			}
+	}
+
+private function splitfile(string $pernr,string $content,$type = "weekly"): ?DomDocument
 {
 	$target = new DomDocument;
 	$target->formatOutput = true;
 	$target->preserveWhiteSpace = false; 
 	$target->loadXML($content);
+	
+	
 	$p = $target->getElementsByTagNameNS("*","GlobalPersonData");
 	//printf("Length = %d\n",$p->length);
 	$remove = [];
@@ -38,8 +61,14 @@ private function splitfile(string $pernr,string $content): ?DomDocument
 		//	printf("Removing %s => %s\n",$pernr,$per->getAttribute("PersonNo"));
 			$remove[$per->getAttribute("PersonNo")] = $per;
 		} else {
-		//	printf("Keeping %s => %s\n",$pernr,$per->getAttribute("PersonNo"));
-		
+			if ($this->skipbanks) {
+				$banks = $this->banks($pernr,$per);
+				if (! $banks) {
+					//printf("Skipping %s\n",$pernr);
+					//continue;
+					return null;
+				} 
+			}
 		}
 		
 	}
@@ -48,27 +77,15 @@ private function splitfile(string $pernr,string $content): ?DomDocument
 	// Remove outside of main loop
 	//printf("Removing %d segments\n",count($remove));
 	$i = 0;
-	foreach($remove as $k=>$del) {
-		//printf("Counter %d\n",$i++);
-		$del->parentNode->removeChild($del);
-	}
+	
 
 	$p = $target->getElementsByTagNameNS("*","GlobalPersonData");
-	$payroll = $target->getElementsByTagNameNS("*","Payroll");
+	
 
-	// Sanity check for 1 person per file
-	if ($p->length == 1 ) {
-			if ($this->skipbanks) {
-			$b = $p[0]->getElementsByTagNameNS("*","PaymentMethodData");
-			if ($b->length != 0 && $p[0]->childNodes->length == 4) {
-				printf("Child nodes == %d, pernr = %d\n",$p[0]->childNodes->length,$pernr);
-				return null;
-			}
-			if ($b->length == 0 && $p[0]->childNodes->length < 4)
-			{
-				printf("Child nodes < 4: %d, pernr = %d\n",$p[0]->childNodes->length,$pernr);
-				return null;
-			}
+		
+		foreach($remove as $k=>$del) {
+		//printf("Counter %d\n",$i++);
+			$del->parentNode->removeChild($del);
 		}
 		
 		//<gpi:AssignmentAction>
@@ -86,20 +103,17 @@ private function splitfile(string $pernr,string $content): ?DomDocument
 	
 		printf("Changing effective date to %s for %s\n",$date,$pernr);
 		if ($date == date("d/m/Y")) {
-			return null;
+		//	return null;
 		}
 		
 		$target->getElementsByTagNameNS("*","EffectiveDate")[0]->nodeValue = $date;
 		return $target;
-	} else {
-		printf("Fatal: Found %d records\n",$p->length);
-		exit(0);
-	}
+	
 }
 
 private function deletefiles($dir) {
 	$date = substr($dir,-8);
-	$dir = str_replace("output","splitted2",$dir);
+	$dir = str_replace("output",$this->destinationFolder,$dir);
 	foreach(glob($dir."\\*",GLOB_ONLYDIR) as $filefolder) { 
 		array_map('unlink', glob($filefolder."\\*.xml"));
 		rmdir($filefolder);
@@ -110,17 +124,22 @@ private function deletefiles($dir) {
 	Scan GPI files, split it to one file per person
 	Update effective date
 */
-public function __construct()
+public function __construct($destinationFolder = "")
 {
 	printf("Operation, skip banks = %s\n",$this->skipbanks);
+	$this->today = date("d/m/Y");
+	if (!empty($destinationFolder)) {
+		$this->destinationFolder = $destinationFolder;
+	}
+	printf("Running with destination folder = %s\n",$this->destinationFolder);
 	//$this->dispatch();
 }
 
-public function split() {
+public function split($dirfilter,$filefilter,$type = "") {
 
 	$d = new DomDocument;
 	$cnt = 0;
-	$version = 1;
+	$version = 2;
 	//$filterArr = ["8000000203",'8000034258','8000005485'];
 	$filterArr = [
 	'8000034820',
@@ -136,7 +155,7 @@ public function split() {
 '8000035252',
 '8000035256',
 '8000009724'];
-	$filterArr = ['8000035033'];
+	$filterArr = [];
 
 	// LCC mapping
 	$mapping = [];
@@ -145,20 +164,29 @@ public function split() {
 	$mapping['Energy Labs, Inc.'] = ['US004','0692'];
 	$mapping['High Voltage Maintenance Corporation'] = ['US003','0815'];
 
-foreach(glob("..\\output\\20181227*",GLOB_ONLYDIR) as $dir) {
+foreach(glob($dirfilter,GLOB_ONLYDIR) as $dir) {
 	printf("Processing %s\n",$dir);
 	$this->deletefiles($dir);
 	$cnt = 0;
-	foreach(glob($dir."\\*858.xml") as $file) {
+	foreach(glob($dir.$filefilter) as $file) {
 		$cnt++;
 		printf("Processing %s\n",$file);
-		$base = str_replace("output","splitted2",$dir);
+		
+		$d->load($file);
+		$payroll = $d->getElementsByTagNameNS("*","Payroll")[0]->nodeValue;
+	
+		if (! empty($type) && strpos($payroll," ".$type." ") === false) {
+			printf("Skipping Payroll %s\n",$payroll);
+			continue;
+		}
+		
+		$base = str_replace("output",$this->destinationFolder,$dir);
 		$folder = $base."\\file".$cnt;
-		printf("Folder = %s\n",$folder);
+		printf("Target Folder = %s\n",$folder);
 		if (! is_dir($folder)) {
 			mkdir($folder,0777,true);
 		}
-		$d->load($file);
+		
 		$p = $d->getElementsByTagNameNS("*","GlobalPersonData");
 		if ($p->length == 0) {
 				printf("No persons found in %s\n",$file);
@@ -166,69 +194,94 @@ foreach(glob("..\\output\\20181227*",GLOB_ONLYDIR) as $dir) {
 		} else {
 			printf("There are %d persons in the file\n",$p->length);
 		}
+		$l = $p->length;
 		$xml = $d->saveXML();
+		$i =0;
 		foreach($p as $res) {
-		
+			$i++;
 			$pernr = $res->getAttribute("PersonNo");
 			if (!empty($filterArr) && ! in_array($pernr,$filterArr)) {
 			
-				printf("Skip!".$pernr.", count = %d\n",count($filterArr));
+				printf("Skip ".$pernr.", count = %d\n",count($filterArr));
 				
 				continue;
 			} 
+			
+			printf("Processing %d of %d (%s %%)\n",$i,$l,round($i/$l*100,1));
+			
 			$modified = $this->splitfile($pernr,$xml);
 			if ($modified == null) {
 				printf("Skipping %s\n",$pernr);
 				continue;
 			}
 			// Set LCC in filename and employee id
+			
 			if ($res->parentNode->getElementsByTagNameNS("*","LegalEmployerName")->length == 0) {
 				printf("No legal employer found for %s\n",$pernr);
-				$lcc = "US001";
-				$cc = "0737";
+				$lcc = "00000";
+				//$cc = "0737";
+				$legal = false;
 			} else {
 				list($lcc,$cc) = $mapping[$res->parentNode->getElementsByTagNameNS("*","LegalEmployerName")[0]->nodeValue];
+				$legal = true;
 			}
-			$assignment = $modified->getElementsByTagNameNS("*","AssignmentData");
 			
-			if ($assignment->length == 2) {
-				$assignment[0]->setAttribute("AssignmentNumber",$pernr.$cc);
-				$assignment[1]->setAttribute("AssignmentNumber",$pernr.$cc);
+			if ($legal) {
+				/*
+				$assignment = $modified->getElementsByTagNameNS("*","AssignmentData");
+				
+				if ($assignment->length == 2) {
+					$assignment[0]->setAttribute("AssignmentNumber",$pernr.$cc);
+					$assignment[1]->setAttribute("AssignmentNumber",$pernr.$cc);
+				}
+				*/
 			}
 			$clean = str_replace("..\\output\\","",$dir);
-			$base = sprintf("..\\splitted2\\%s\\file%d\\VER%s1012%s_v%d_%s.xml",$clean,$cnt,$lcc,$clean,$version,$pernr);
-			printf("Saving output to %s\n",$base);
+			$base = sprintf("..\\splitted2\\%s\\file%d\\VER%s1012%s_v%d_%s_%s.xml",$clean,$cnt,$lcc,$clean,$version,$type,$pernr);
+			
+			if ($this->save) {
+				printf("Saving output to %s\n",$base);
 				$modified->save($base);
+			} else {
+				echo $modified->saveXML();
+				exit(0);
+			}
 		}
 	}
 }
 }
-	public function fixcontent()
+	public function fixcontent($dirfilter,$filefilter)
 	{
-		foreach(glob("..\\inbound\\201*",GLOB_ONLYDIR) as $dir) {
-	printf("Directory %s\n",$dir);
-	$output = str_replace("inbound","output",$dir);
-	array_map('unlink', glob($output."\\*.xml"));
+		foreach(glob($dirfilter,GLOB_ONLYDIR) as $dir) {
+		printf("Directory %s\n",$dir);
+		$output = str_replace("inbound","output",$dir);
+		if (! is_dir($output)) {
+			mkdir($output);
+		} else {
+			array_map('unlink', glob($output."\\*.xml"));
+		}
 	
-	//continue;
-	foreach(glob($dir."\\*.xml") as $file) {
-		printf("Processing file %s\n",$file);
-		$content = file_get_contents($file);	
-		$content = str_replace("E8000","8000",$content);
-		$d = new DomDocument;
-		$d->formatOutput = true;
-		$d->loadXML($content);
-		$content = $d->saveXML();
-		printf("Saving file %s\n",$file);
-		
-		file_put_contents(str_replace("inbound","output",$file),$content);
+		//continue;
+		foreach(glob($dir.$filefilter) as $file) {
+			printf("Processing file %s\n",$file);
+			$d = new DomDocument;
+			$d->formatOutput = true;
+			$d->load($file);
+			printf("Saving file %s\n",$file);
+			
+			$d->save(str_replace("inbound","output",$file));
+		}
 	}
 }
-	}
 
 
 }
-$g = new GPIfix;
-//$g->fixcontent();
-$g->split();
+$g = new GPIfix("splitted2");
+$g->save = true;
+$dirfilter = "..\\inbound\\20190105*";
+$filefilter = "\\*.xml";
+$g->fixcontent($dirfilter,$filefilter);
+$dirfilter = "..\\output\\20190105*";
+$filefilter = "\\*.xml";
+$g->split($dirfilter,$filefilter,"");
 ?>

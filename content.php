@@ -20,16 +20,25 @@ class gpi {
 	private function getValue($d,$value)
 	{
 		$r = $d->getElementsByTagNameNS("*",$value);
-
-		if ($r->length == 1) {
+		switch($r->length) {
+		case 0:
+			return null;
+			break;
+		case 1:
 			return $r[0]->nodeValue;
-		} else {
-			printf("Value %s not found\n",$value);
+			break;
+		case 2:
+			return $r[0]->nodeValue;
+			break;
+		default:
+			return $r[0]->nodeValue;
+			printf("Value %s not found with r = %d\n",$value,$r->length);
 		}
 	}
 
-	public function dispatch($d) {
+	public function dispatch() {
 		
+		$d = $this->domdoc;
 		$s = $d->getElementsByTagNameNS("*","GlobalPersonData");
 		switch ($this->type)
 		{
@@ -70,7 +79,7 @@ class gpi {
 			break;
 		
 		case 'Assignment':
-			printf("Pernr;begda;endda;hire reason\n");
+			printf("Pernr;begda;endda;assignment\n");
 			foreach($s as $emp) {
 				
 				$res = $this->assignmentdetails($emp);
@@ -85,7 +94,7 @@ class gpi {
 			break;
 		
 		case 'Address':
-			printf("Pernr;begda;endda;hire reason\n");
+			printf("Pernr;begda;endda;address;city;state;zipcode\n");
 			foreach($s as $emp) {
 				
 				$res = $this->addressdetails($emp);
@@ -107,11 +116,16 @@ class gpi {
 				}
 			}
 			break;
+			default:
+			printf("Nothing found for %s\n",$this->type);
+			exit(0);
+			break;
 		}
 	}
 	
 	private function formatdate($date) {
 		$d = explode("/",$date);
+		if (count($d) != 3) return null; 
 		if ($date == '31/12/4712') {
 			return '9999-12-31';
 		}
@@ -130,13 +144,21 @@ class gpi {
 	private function assignmentdetails($d)
 	{
 		$s = $d->getElementsByTagNameNS("*","AssignmentData");
+		$result = null;
+		if ($s->length == 2) {
+			$result = $s[0];
+		}
+	//	var_dump($result->parentNode->nodeName);
+	//	exit(0);
 		
-		foreach($s as $result) {
-			if ($result->childNodes->length > 4) {
-				var_dump($result);
-				exit(0);
+		if (! empty($result) && $result->childNodes->length > 4) {
+		
 				$begda = $this->formatdate($this->getValue($result,"StartDate"));
-
+				if ($begda == null) {
+					
+					return sprintf("No dates found for assignment\n");;
+				
+				}
 				$endda = $this->formatdate($this->getValue($result,"EndDate"));
 				if (strpos($begda,"2018-12") !== false) {
 					return sprintf("%s;%s;%s;%s\n",
@@ -146,7 +168,7 @@ class gpi {
 					$this->getValue($result,"AssignmentActionReason"));
 				} 
 			}
-		}
+		
 	}
 
 	private function salarydetails($d)
@@ -294,21 +316,35 @@ class gpi {
 		}
 	}
 	
-	public function __construct($file,$type) {
+	public function __construct($file) {
 	
-		$this->type = $type;
-		if (! file_exists($file)) {
-			printf("File %s does not exist\n",$file);
-			exit(0);
-		}
-		printf("File %s\n",$file);
+		
+		printf("==============\nFile %s\n",$file);
 		$d = new DomDocument;
 		$d->load($file);
+		$this->domdoc = $d;
+		$payroll = $d->getElementsByTagNameNS("*","Payroll")[0]->nodeValue;
+		printf("Payroll is %s\n",$payroll);
+	
+	}
+	
+	public function scan($type)
+	{
+		printf("========================\nScanning for %s\n",$type);
+		$this->type = $type;
+		$this->dispatch();
 		
-		$this->dispatch($d);
 	}
 	
 }
 
-$f = new gpi('C:\temp\vertiv\output\20181227\VER000001012201812270918.bak','Hire');
+foreach(glob('C:\temp\vertiv\inbound\20190105\*.xml') as $file) {
+	$f = new gpi($file);
+	$f->scan('Hire');
+	$f->scan('Termination');
+	$f->scan('Address');
+	$f->scan('Salary');
+	$f->scan('Bank');
+	$f->scan('Assignment');
+}
 ?>
